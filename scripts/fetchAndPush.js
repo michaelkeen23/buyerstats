@@ -1,9 +1,13 @@
 // scripts/fetchAndPush.js
 
 require('dotenv').config();
+console.log('→ DISTRIBUTE_USER:', process.env.DISTRIBUTE_USER);
+console.log('→ DISTRIBUTE_PASS:', process.env.DISTRIBUTE_PASS);
+console.log('→ KEY FILE:', process.env.GOOGLE_APPLICATION_CREDENTIALS);
+
 const { chromium } = require('playwright');
 const { parse } = require('csv-parse/sync');
-const { google } = require('googleapis');
+const { google } = require('googleapis');   // ← only one google import
 const fs = require('fs');
 const path = require('path');
 
@@ -42,9 +46,7 @@ function fmt(d) {
 }
 
 async function downloadReportCsv(rangeKey) {
-  if (!VALID_KEYS.includes(rangeKey)) throw new Error('Invalid range');
   const [start, end] = computeRange(rangeKey);
-  
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();
 
@@ -61,24 +63,24 @@ async function downloadReportCsv(rangeKey) {
   await page.getByRole('link', { name: 'Reports' }).click();
   await page.getByRole('tab', { name: 'Custom Report' }).first().click();
 
-  // 3. Inject date range text
-  const fromText = fmt(start);
-  const toText = fmt(end);
+  // 3. Inject date range
+  const fromText = fmt(start), toText = fmt(end);
   await page.evaluate(({ from, to }) => {
     const el = document.querySelector('.reportrange-text');
     if (el) el.innerText = `Report dates: ${from} - ${to}`;
   }, { from: fromText, to: toText });
 
-  // 4. Click Download to enqueue
+  // 4. Enqueue CSV
   await page.getByRole('tabpanel').getByRole('button', { name: 'Download' }).click();
   await page.waitForTimeout(2000);
 
-  // 5. Download the CSV from history
+  // 5. Download from History
   const [ download ] = await Promise.all([
     page.waitForEvent('download'),
     page.getByRole('row').filter({ hasText: '.csv' }).first().getByRole('button').click()
   ]);
 
+  // 6. Read CSV text
   const buffer = await download.createReadStream().then(stream => {
     const chunks = [];
     return new Promise((resolve, reject) => {
@@ -87,8 +89,16 @@ async function downloadReportCsv(rangeKey) {
       stream.on('error', reject);
     });
   });
+  const csvText = buffer.toString('utf8');
+
+  // 7. Debug dump
+  const debugDir = path.resolve(__dirname, '..', 'debug');
+  if (!fs.existsSync(debugDir)) fs.mkdirSync(debugDir);
+  fs.writeFileSync(path.join(debugDir, `${rangeKey}.raw.csv`), csvText, 'utf8');
+  console.log(`→ [debug] Wrote raw CSV to debug/${rangeKey}.raw.csv`);
+
   await browser.close();
-  return buffer.toString('utf8');
+  return csvText;
 }
 
 async function pushRawData(data, rangeKey) {
@@ -112,6 +122,7 @@ async function pushRawData(data, rangeKey) {
     insertDataOption: 'INSERT_ROWS',
     requestBody: { values: rows }
   });
+  console.log('→ Raw data appended.');
 }
 
 function aggregateByBuyer(csvText) {
@@ -123,10 +134,10 @@ function aggregateByBuyer(csvText) {
   const totals = {};
   for (const row of records) {
     const buyer = row['User Name'];
-    const qty = parseInt(row['Order QTY'], 10) || 0;
+    const qty   = parseInt(row['Order QTY'], 10) || 0;
     totals[buyer] = (totals[buyer] || 0) + qty;
   }
-  return Object.entries(totals).map(([b,t]) => ({ buyer: b, total: t }));
+  return Object.entries(totals).map(([buyer, total]) => ({ buyer, total }));
 }
 
 (async () => {
@@ -137,81 +148,9 @@ function aggregateByBuyer(csvText) {
     const csvText = await downloadReportCsv(rangeKey);
     const summary = aggregateByBuyer(csvText);
     await pushRawData(summary, rangeKey);
-    console.log('✅ Raw data appended.');
-  } catch (e) {
-    console.error('❌', e);
+    console.log('🎉 Done.');
+  } catch (err) {
+    console.error('❌ Error:', err);
     process.exit(1);
   }
 })();
-
-
-// scripts/buildSummary.js
-
-// This file goes in the same "scripts/" folder alongside fetchAndPush.js
-
-require('dotenv').config();
-const { google } = require('googleapis');
-const path = require('path');
-
-async function buildSummary() {
-  const auth = new google.auth.GoogleAuth({
-    keyFile: path.resolve(process.env.GOOGLE_APPLICATION_CREDENTIALS),
-    scopes: ['https://www.googleapis.com/auth/spreadsheets']
-  });
-  const sheets = google.sheets({ version: 'v4', auth });
-  const spreadsheetId = process.env.SHEET_ID;
-
-  // 1. Fetch RawData
-  const raw = await sheets.spreadsheets.values.get({
-    spreadsheetId,
-    range: 'RawData!A2:C'
-  });
-  const rows = raw.data.values || [];
-
-  // 2. Parse into structure { dateRange: { buyer: total, ... }, ... }
-  const dataMap = {};
-  let currentRange = null;
-  for (const row of rows) {
-    if (row.length === 1 && row[0]) {
-      currentRange = row[0];
-      dataMap[currentRange] = {};
-    } else if (row.length === 2 && currentRange) {
-      const [buyer, qty] = row;
-      if (buyer !== 'Buyer') {
-        dataMap[currentRange][buyer] = parseInt(qty,10) || 0;
-      }
-    }
-  }
-
-  // 3. Get unique buyers and dateRanges
-  const dateRanges = Object.keys(dataMap);
-  const buyers = Array.from(
-    new Set([].concat(...dateRanges.map(dr => Object.keys(dataMap[dr]))))
-  );
-
-  // 4. Build summary array: header + rows
-  const header = ['Buyer', ...dateRanges];
-  const table = [header];
-  for (const buyer of buyers) {
-    const row = [buyer];
-    for (const dr of dateRanges) {
-      row.push(dataMap[dr][buyer] || 0);
-    }
-    table.push(row);
-  }
-
-  // 5. Write to Summary tab
-  await sheets.spreadsheets.values.update({
-    spreadsheetId,
-    range: 'Summary!A1',
-    valueInputOption: 'RAW',
-    requestBody: { values: table }
-  });
-
-  console.log('✅ Summary tab updated.');
-}
-
-buildSummary().catch(e => {
-  console.error('❌', e);
-  process.exit(1);
-});
