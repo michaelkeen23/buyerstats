@@ -1,9 +1,9 @@
 name: Nightly Ticket Summary
 
 on:
+  workflow_dispatch:
   schedule:
-    # Runs daily at 05:00 UTC (1 AM America/New_York)
-    - cron: '0 5 * * *'
+    - cron: '0 5 * * *'  # 05:00 UTC = 01:00 America/New_York
 
 jobs:
   nightly-summary:
