@@ -23,21 +23,21 @@ jobs:
       - name: Install Playwright browsers
         run: npx playwright install chromium
 
-      - name: Create service-account.json
+      - name: Write service-account.json
         run: |
-          echo "${{ secrets.GCP_SA_KEY }}" > service-account.json
+          printf '%s\n' "${{ secrets.GCP_SA_KEY }}" > service-account.json
           chmod 600 service-account.json
 
       - name: Fetch Yesterday's report
         run: node scripts/fetchAndPush.js "Yesterday"
         env:
-          DISTRIBUTE_USER:                   ${{ secrets.DISTRIBUTE_USER }}
-          DISTRIBUTE_PASS:                   ${{ secrets.DISTRIBUTE_PASS }}
-          SHEET_ID:                          ${{ secrets.SHEET_ID }}
-          GOOGLE_APPLICATION_CREDENTIALS:    service-account.json
+          DISTRIBUTE_USER:                ${{ secrets.DISTRIBUTE_USER }}
+          DISTRIBUTE_PASS:                ${{ secrets.DISTRIBUTE_PASS }}
+          SHEET_ID:                       ${{ secrets.SHEET_ID }}
+          GOOGLE_APPLICATION_CREDENTIALS: service-account.json
 
       - name: Build Summary Pivot
         run: node scripts/buildSummary.js
         env:
-          SHEET_ID:                          ${{ secrets.SHEET_ID }}
-          GOOGLE_APPLICATION_CREDENTIALS:    service-account.json
+          SHEET_ID:                       ${{ secrets.SHEET_ID }}
+          GOOGLE_APPLICATION_CREDENTIALS: service-account.json
