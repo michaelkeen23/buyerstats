@@ -102,8 +102,8 @@ async function downloadReportCsv(rangeKey) {
 }
 
 async function pushRawData(data, rangeKey) {
-  const auth = new google.auth.GoogleAuth({
-    keyFile: path.resolve(process.env.GOOGLE_APPLICATION_CREDENTIALS),
+   const auth = new google.auth.GoogleAuth({
+    credentials: JSON.parse(process.env.GCP_SA_KEY),
     scopes: ['https://www.googleapis.com/auth/spreadsheets']
   });
   const sheets = google.sheets({ version: 'v4', auth });
