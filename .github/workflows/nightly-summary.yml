@@ -28,6 +28,11 @@ jobs:
         with:
           credentials_json: ${{ secrets.GCP_SA_KEY }}
 
+      - name: Create service-account.json
+        run: |
+          echo "${{ secrets.GCP_SA_KEY }}" > service-account.json
+          chmod 600 service-account.json
+
       - name: Fetch Yesterday's report
         run: node scripts/fetchAndPush.js "Yesterday"
         env:
